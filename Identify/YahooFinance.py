@@ -4,6 +4,8 @@ import yfinance as yf
 from selenium import webdriver
 from time import sleep
 
+from Utils.Config import Config
+
 class YahooFinance(object):
     
     def __init__(self):
@@ -60,24 +62,13 @@ class YahooFinance(object):
         return results
 
     def fetchMostActive(self, filterStocks):
-        driver = webdriver.Chrome(executable_path='/Users/mayankpoddar/Downloads/chromedriver')
+        driver = webdriver.Chrome(executable_path=Config().get("GLOBAL", "ChromeDriverPath"))
         #driver.set_page_load_timeout(60)
         results = []
-        tries = 0
-        url = "https://in.finance.yahoo.com/most-active?offset=0&count=200"
-        while True:
-            try:
-                tries += 1
-                self.__fetch(driver, url, results)
-                break
-            except Exception as e:
-                print("Try: {} failed".format(tries))
-                if tries == 5:
-                    raise Exception("5 Tries reached. Exception: {}".format(e))
-                else:
-                    continue
-        if len(results) < filterStocks:
-            url = "https://in.finance.yahoo.com/most-active?offset=200&count=200"
+        count = 0
+        while len(results) < filterStocks:
+            url = "https://in.finance.yahoo.com/most-active?offset={}&count=200".format(count*200)
+            tries = 0
             while True:
                 try:
                     tries += 1
@@ -89,6 +80,7 @@ class YahooFinance(object):
                         raise Exception("5 Tries reached. Exception: {}".format(e))
                     else:
                         continue
+            count += 1
         try:
             driver.close()
         except:

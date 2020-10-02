@@ -1,19 +1,22 @@
 import sys
 from datetime import datetime, timedelta
+
 from Identify.StocksIdentifier import StocksIdentifier
 from Analyse.StocksAnalyser import StocksAnalyser
 from Identify.YahooFinance import YahooFinance
+from Utils.Config import Config
 
 class Simulator(object):
                 
     def __init__(self):
         investment, days, tickers, count = self.argsParse(sys.argv)
-        if not tickers:
-            sys.stdout = open("results.log", "w")
         self.initialInvestment = investment
         self.investment = investment
-        self.days = days if days else 7
-        count = count if count else 50
+        self.days = days
+        
+        # Multiplier is basically for Real Time Trading, for example in 15 min intervals,
+        # we have self.multiplier candles between 9:30 AM IST to 3:30 PM IST
+        self.multiplier = 1
 
         print("Investing Amount: {}".format(investment))
 
@@ -21,7 +24,7 @@ class Simulator(object):
             yf = YahooFinance()
             self.rawData = yf.fetchData(stocks=tickers, context='large')
         else:
-            identifier = StocksIdentifier(interval='15m')
+            identifier = StocksIdentifier(interval='1d')
             basicData, self.rawData = identifier.run(filterStocks=count)
             tickers = [stockDict["Ticker"] for stockDict in basicData]
         
@@ -33,17 +36,17 @@ class Simulator(object):
         self.portfolio = {}
         self.stocks = tickers
 
-        self.ewmData = self.analyser.calculateEMAs(self.rawData, ewmMultiplier=25)
-        self.bolData = self.analyser.calculateBollingerBand(self.rawData, windowMultiplier=25)
-        self.rsiData = self.analyser.calculateRSI(self.rawData, rsiMultiplier=25)
+        self.ewmData = self.analyser.calculateEMAs(self.rawData, ewmMultiplier=self.multiplier)
+        self.bolData = self.analyser.calculateBollingerBand(self.rawData, windowMultiplier=self.multiplier)
+        self.rsiData = self.analyser.calculateRSI(self.rawData, rsiMultiplier=self.multiplier)
         self.pivData = self.analyser.calculatePivot(self.rawData)
 
-        self.initialize(amount=10000)        
+        self.initialize()        
 
-    def initialize(self, amount):
+    def initialize(self):
         self.portfolio = dict().fromkeys(self.stocks)
         for stock in self.stocks:
-            portfolio = {"Position": None, "Amount": 0, "Quantity": 0, "Charges": 0, "BuyRSI": None, "LastTradedPrice": None, "BuyAverage": 0}
+            portfolio = {"Position": None, "GrossProfit": 0, "Quantity": 0, "Charges": 0, "BuyRSI": None, "LastTradedPrice": None, "BuyAverage": 0}
             self.portfolio[stock] = portfolio
 
     def argsParse(self, arguments):
@@ -60,6 +63,17 @@ class Simulator(object):
                 days = int(arg.split("days=")[-1])
             elif arg.startswith("count="):
                 count = int(arg.split("count=")[-1])
+        if not investment:
+            investment = int(Config().get("GLOBAL", "Investment"))
+        if not days:
+            days = int(Config().get("GLOBAL", "Days"))
+        if not count:
+            count = int(Config().get("GLOBAL", "NumStocks"))
+        if not tickers:
+            stringTickers = Config().get("GLOBAL", "Tickers")
+            if stringTickers.strip():
+                tickers = [x.strip() for x in stringTickers.split(",")]
+            
         return investment, days, tickers, count
 
     def calculateCharges(self, quantity, price, sell=False):
@@ -94,34 +108,26 @@ class Simulator(object):
         else:
             return "Uncertain"
 
-    def topup(self, ticker, amount):
-        if self.investment >= amount:
-            self.investment -= amount
-            self.portfolio[ticker]["Amount"] += amount
-        return self.portfolio[ticker]["Amount"]
-
     def trade(self, date, stock, position, price, rsi):
 
         rsi = rsi["RSI-{}".format(stock)]
 
-        leftAmount = min(10000, self.investment) #self.portfolio[stock]["Amount"]
+        # Taking 10% of Initial Investment
+        leftAmount = min(0.01*self.initialInvestment, self.investment)
         leftQuantity = self.portfolio[stock]["Quantity"]
 
         if position == "BUY":
-            #if leftAmount < price:
-            #    leftAmount = self.topup(stock, 10000)
             quantity = int(leftAmount // price)
             charges = self.calculateCharges(quantity, price, sell=False)
             if quantity > 0:
                 print("Date: {} ------ Bought {} ------ Quantity: {}, Price: {:.2f}".format(date, stock, quantity, price))
                 self.portfolio[stock]["Position"] = position
                 self.portfolio[stock]["Quantity"] = leftQuantity + quantity
-                #self.portfolio[stock]["Amount"] = leftAmount - quantity*price - charges
                 self.portfolio[stock]["Charges"] += charges
                 self.portfolio[stock]["BuyRSI"] = rsi
                 self.portfolio[stock]["LastTradedPrice"] = price
                 self.portfolio[stock]["BuyAverage"] = (leftQuantity*self.portfolio[stock]["BuyAverage"] + price*quantity + charges)/self.portfolio[stock]["Quantity"]
-                self.investment = self.investment - (quantity*price + charges)
+                self.investment -= (quantity*price + charges)
                 return True
         elif position == "SELL":
             quantity = leftQuantity
@@ -130,11 +136,11 @@ class Simulator(object):
                 print("Date: {} ------ Sold {} ------ Quantity: {}, Price: {:.2f}".format(date, stock, quantity, price))
                 self.portfolio[stock]["Position"] = position
                 self.portfolio[stock]["Quantity"] = leftQuantity - quantity
-                self.portfolio[stock]["Amount"] += quantity*(price - self.portfolio[stock]["BuyAverage"])
+                self.portfolio[stock]["GrossProfit"] += quantity*(price - self.portfolio[stock]["BuyAverage"])
                 self.portfolio[stock]["Charges"] += charges
                 self.portfolio[stock]["LastTradedPrice"] = None
                 self.portfolio[stock]["BuyAverage"] = 0
-                self.investment = self.investment + (quantity*price - charges)
+                self.investment += (quantity*price - charges)
                 return True
 
         return False
@@ -142,7 +148,7 @@ class Simulator(object):
     def simulate(self):
         start = (datetime.now() - timedelta(days=self.days))
         startDate = start.strftime("%Y-%m-%d")
-        period = self.days*25
+        period = self.days*self.multiplier
         totalPeriods = self.rawData.shape[0]
         relevantData = self.rawData.head(totalPeriods - period)
         actualData = self.rawData.tail(period)
@@ -182,7 +188,7 @@ class Simulator(object):
         print("Final Position :-")
         print("*"*10)
 
-        #actualData = actualData.dropna(axis=0, how='any', inplace=False)
+        actualData = actualData.dropna(axis=0, how='any', inplace=False)
 
         finalPosition = 0
         for lastIndex in range(-1,(-1)*actualData.shape[0], -1):
@@ -203,21 +209,20 @@ class Simulator(object):
             ltp = lastTradedPrice["Close", stock]
             pos = self.position(stock, ltp, RSI=lastRSI, Bollinger=lastBol, EWM=lastEwm, Pivot=lastPiv)
             mtm = 0 if self.portfolio[stock]["Quantity"] == 0 else ltp*self.portfolio[stock]["Quantity"]
-            profit = self.portfolio[stock]["Amount"] - self.portfolio[stock]["Charges"]
+            profit = self.portfolio[stock]["GrossProfit"] - self.portfolio[stock]["Charges"]
             statement = "Stock: {}, LTP: {:.2f}, Pos: {}, LastRSI: {:.2f}, Quantity: {}, BuyAverage: {:.2f}, MTM: {:.2f}, RealisedProfit: {:.2f}".format(stock, ltp, pos, lastRSI["RSI-{}".format(stock)], self.portfolio[stock]["Quantity"], self.portfolio[stock]["BuyAverage"], mtm, profit)
             print(statement)
             if str(mtm) != "nan":
-                finalPosition += mtm
+                finalPosition += mtm + profit
 
         finalPosition += self.investment
 
         print("*"*10)
         
-        returns = 100*((finalPosition - self.initialInvestment)/(self.initialInvestment*1.0)) 
-
         print("InitialInvestment: {:.2f}".format(self.initialInvestment))
-        #print("UsedInvestment: {:.2f}".format(self.initialInvestment-self.investment))
         print("FinalPosition: {:.2f}".format(finalPosition))
+        returns = 100*((finalPosition - self.initialInvestment)/(self.initialInvestment*1.0)) 
+        print("Return: {} %".format(returns))
         
         print("*"*10)
 
