@@ -1,0 +1,2 @@
+# Trader
+AlgoTrader Bot
