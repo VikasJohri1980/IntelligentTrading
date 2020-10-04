@@ -1,23 +1,29 @@
+from os.path import join as path_join
+from os.path import dirname
 import pandas as pd
 import numpy as np
+
+from Utils.Config import Config
 from Identify.YahooFinance import YahooFinance
 
 class StocksIdentifier(object):
 
-    def __init__(self, priceThreshold = 10000, interval=None):
-        self.priceThreshold = priceThreshold
+    def __init__(self, interval=None):
+        self.path = path_join(dirname(__file__), "ind_nifty500list.csv")
+        self.priceThreshold = int(Config().get("GLOBAL", "PriceThresholdPerShare"))
         self.interval = interval
         self.yf = YahooFinance()
 
-    def run(self, top=200, filterStocks=200):
-        # First Leg Fetch Most Active (Top 200 or less)
-        mostActive = self.yf.fetchMostActive(filterStocks)
-        tickers = {}
-        for ticker, price in mostActive:
-            if price <= self.priceThreshold:
-                tickers[ticker] = price
-            if len(tickers) == top:
-                break
+    def run(self, filterStocks=200):
+        
+        mode = Config().get("GLOBAL", "Mode")
+        
+        if mode.lower().strip() == "simulation":
+            tickers = dict.fromkeys([el + ".NS" for el in pd.read_csv(self.path)["Symbol"].values])
+        else:
+            # First Leg Fetch Most Active (Top 200 or less)
+            mostActive = self.yf.fetchMostActive(filterStocks)
+            tickers = dict.fromkeys([el[0] for el in mostActive])
 
         # Fetch corresponding data from Yahoo Finance
         data = self.yf.fetchData(list(tickers.keys()))
@@ -27,6 +33,9 @@ class StocksIdentifier(object):
         volatilities = []
 
         for ticker in tickers:
+            if data["Close"][ticker].iloc[-1] > self.priceThreshold:
+                continue
+            tickers[ticker] = data["Close"][ticker].iloc[-1]
             tempLogReturns = np.log(data["Close"][ticker]/data["Close"][ticker].shift(1))
             tempVolatility = tempLogReturns.rolling(5).std() * np.sqrt(5)
             if "nan" != str(tempVolatility.iloc[-1]):
@@ -34,7 +43,7 @@ class StocksIdentifier(object):
         
         # Sort the Volatilities in Descending Order
         volatilities = sorted(volatilities, reverse=True, key=lambda x: x[1])
-        # Take the top 20 most volatile ones
+        # Take the top {filterstocks} most volatile ones
         chosen = volatilities[:filterStocks]
 
         results = []

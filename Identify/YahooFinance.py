@@ -25,7 +25,7 @@ class YahooFinance(object):
             raise Exception("Please pass the stock(s) tickers.")
  
         if context == 'small':
-            df = yf.download(tempStocks, period="1y", interval="1d")
+            df = yf.download(tempStocks, period="5y", interval="1d")
         else:
             df = yf.download(tempStocks, period="60d", interval="15m")
 
